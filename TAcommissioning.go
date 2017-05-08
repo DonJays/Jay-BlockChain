@@ -18,12 +18,13 @@ var logger = shim.NewLogger("CTACChaincode")
 //===================================================================================================
 //	 Structure Definitions
 //===================================================================================================
+
+//===================================================================================================
 //	Chaincode - A blank struct for use with Shim (A HyperLedger included go file used for get/put state
 //				and other HyperLedger functions)
 //=====================================================================================================
 type  SimpleChainCode struct {
 }
-
 
 //=====================================================================================================
 //	Booking - Defines the structure for a room reservation. JSON on right tells it what JSON fields to 
@@ -36,6 +37,8 @@ type Booking struct {
 	TotalBill		float32	`json:"totalBill"`  	//no of days client will be staying		
 	IsSettled		bool   	`json:"isSettled"`  	//is booking is pending or completed
 	Payables		float32	`json:"payables"`   	//final payables to agent
+	status			int		`json:"status"`			//Status about the booking during its life cycle
+	//CheckedOutDt		string	`json:"CheckedOutDt"`	//Checked out date of the guest
 	//GuestName			string	`json:"GuestName"` 		//Guest Name who stayed in the hotel
 	//ArrivalDt			string	`json:"ArrivalDt"` 		//Guest Arrival Date
 	//RoomRate			float32	`json:"RoomRate"` 		//Room rate which booking happen and eligilble for commission to travel agent
@@ -47,24 +50,38 @@ type Booking struct {
 }
 
 
-//=================================================================================================================================
+//=======================================================================================================
+//	 Status types - Booking has different staus, this is part of the business logic to determine what can 
+//					be done to the Booking at points in it's lifecycle
+//=======================================================================================================
+const   STATE_RESERVATION  		=  0
+const   STATE_INHOUSE  			=  1
+const   STATE_CHECKOUT		 	=  2
+const   STATE_CANCEL 			=  3
+
+
+
+//========================================================================================================
 //	 ---------        Main ------------- main - Starts up the chaincode
-//=================================================================================================================================
+//========================================================================================================
 func main() {
 
 	err := shim.Start(new(SimpleChainCode))
 	if err != nil { fmt.Printf("Error starting Chaincode: %s", err) }
 }
 
-//==============================================================================================================================
+//==========================================================================================================
 //	Init Function - Called when the user deploys the chaincode
-//==============================================================================================================================
+//==========================================================================================================
 func (t *SimpleChaincode) Init(stub shim.ChaincodeStubInterface, function string, args []string) ([]byte, error) {
 
-	//Args
-	//				0
-	//			peer_name (TA/HOTEL/CTAC)
-	retrun nil nil
+	var book Booking
+
+	bytes, err := json.Marshal(book)
+    if err != nil { return nil, errors.New("Error creating Booking record") }
+	err = stub.PutState("book", bytes)
+
+	return nil, nil
 }
 
 
@@ -73,25 +90,38 @@ func (t *SimpleChaincode) Init(stub shim.ChaincodeStubInterface, function string
 //	 	------------------		General Functions       ------------------
 //=========================================================================================================
 
-//==============================================================================================================================
-//	 retrieveBooking - Gets the state of the data at v5cID in the ledger then converts it from the stored
-//					JSON into the Vehicle struct for use in the contract. Returns the Vehcile struct.
-//					Returns empty v if it errors.
-//==============================================================================================================================
+//==========================================================================================================
+//	 retrieveBooking - Gets the 'booking' in the ledger then converts it from the stored
+//					JSON into the booking struct for use.
+//==========================================================================================================
 func (t *SimpleChaincode) retrieveBooking(stub shim.ChaincodeStubInterface, args[] string) ([]byte, error) {
 
 	var b Booking
 
 	bytes, err := stub.GetState(args[0]);
-
 	if err != nil {	fmt.Printf("Failed to invoke Booking ID: %s", err); return b, errors.New("Error retrieving booking with BookingID = " + BookingID) }
-
 	err = json.Unmarshal(bytes, &v);
 
     if err != nil {	fmt.Printf("Invalid booking record "+string(bytes)+": %s", err); return v, errors.New("Invalid booking record"+string(bytes))	}
-
 	return b, nil
 }
+
+
+/=============================================================================================================
+// save_changes - Writes to the ledger the bookinh struct passed in a JSON format. Uses the shim file's
+//				  method 'PutState'.
+//============================================================================================================
+func (t *SimpleChaincode) save_changes(stub shim.ChaincodeStubInterface, b Booking) (bool, error) {
+
+	bytes, err := json.Marshal(b)
+	if err != nil { fmt.Printf("Error converting booking record: %s", err); return false, errors.New("Error converting booking record") }
+
+	err = stub.PutState(b.bookingID, bytes)
+	if err != nil { fmt.Printf("Error storing booking record: %s", err); return false, errors.New("Error storing booking record") }
+
+	return true, nil
+}
+
 
 
 //=========================================================================================================
@@ -142,13 +172,20 @@ func (t *SimpleChaincode) Query(stub shim.ChaincodeStubInterface, function strin
 
 
 
-//=========================================================================================================
-//	 	------------------		Update Functions       ------------------
-//=========================================================================================================
+//==========================================================================================================
+//	 Ping - Pings the peer to keep the connection alive
+//==========================================================================================================
+func (t *SimpleChaincode) ping(stub shim.ChaincodeStubInterface) ([]byte, error) {
+	return []byte("Hello, I am Alive!"), nil
+}
 
-/=========================================================================================================
+//==========================================================================================================
+//	 	------------------		Update Functions       ------------------
+//===========================================================================================================
+
+/===========================================================================================================
 //	initBooiking - Called on chaincode invoke. 
-/=========================================================================================================
+/===========================================================================================================
 
 func (t *SimpleChaincode) initBooking(stub shim.ChaincodeStubInterface, function string, args [] string)  ([]byte, error) {
 	
@@ -165,7 +202,7 @@ func (t *SimpleChaincode) initBooking(stub shim.ChaincodeStubInterface, function
 	
 	booking_json := &booking(objectType, agentID, bookingID, totalBill, isSettled, payables)
 	
-	err = json.Unmarshal([]byte(bokking_json), &b)				// Convert the JSON defined above into a vehicle object for go
+	err = json.Unmarshal([]byte(bokking_json), &b)				// Convert the JSON defined above into a booking object for go
 	if err != nil { return nil, errors.New("Invalid JSON object")
 		}
 	
@@ -271,9 +308,9 @@ func(t *SimpleChaincode) updateTAPay(stub shim.ChaincodeStubInterface, function 
 //	 	------------------		Read Functions       ------------------
 //=========================================================================================================
 
-/=========================================================================================================
+/===========================================================================================================
 //	getStatus - Called on chaincode invoke. 
-/=========================================================================================================
+/===========================================================================================================
 func(t *SimpleChaincode) getStatus(stub shim.ChaincodeStubInterface, function string, args [] string)  ([]byte, error) {
 
 // arg0 will be caller
